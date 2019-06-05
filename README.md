@@ -1,4 +1,4 @@
-# Simple PowerShell Script Code Obfuscator on Python 3
+# PowerShell Script Code Obfuscator on Python 3
 
 NOTE: This project should be used for authorized testing or educational purposes only. 
 You are free to copy, modify and reuse the source code at your own risk. 
