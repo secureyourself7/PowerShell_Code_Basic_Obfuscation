@@ -1,78 +1,134 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import os
 import random
 import string
 import re
 from itertools import product
 
+# ----------------------------
+# Constants & helpers
+# ----------------------------
 
 END_SYMBOLS = [' ', '\\', '\n', '.', ',', ';', '=', '`', '"', "'", '(', ')', ':', '[', ']', '{', '}', '+']  # no ++
 END_SYMBOLS_BY_2 = list(product(END_SYMBOLS, END_SYMBOLS))
 
 
+def _prev_char(s, i):
+    return s[i - 1] if i - 1 >= 0 else None
+
+
+def _next_end_index(s, start, end_symbols):
+    """
+    Return absolute index of the earliest end symbol after `start`.
+    If none is found, return len(s).
+    """
+    best = len(s)
+    for es in end_symbols:
+        j = s.find(es, start + 1)
+        if j != -1 and j < best:
+            best = j
+    return best
+
+
+def _is_followed_by_end(s, j):
+    """True if j is out of range or char at j is an END_SYMBOL."""
+    return j >= len(s) or s[j] in END_SYMBOLS
+
+
+# ----------------------------
+# Random helpers
+# ----------------------------
+
 def random_string():
-    """Generate a random string of fixed length """
+    """Generate a random string of fixed length"""
     length = random.randint(5, 30)
     letters = string.ascii_lowercase + string.ascii_uppercase
-    return ''.join(random.choice(letters) for i in range(length))
+    return ''.join(random.choice(letters) for _ in range(length))
 
 
 def random_bits(length):
-    """Generate a random 1/0 string of fixed length """
+    """Generate a random 1/0 string of fixed length"""
     chars = '01'
-    return ''.join(random.choice(chars) for i in range(length))
+    return ''.join(random.choice(chars) for _ in range(length))
 
 
 def randomize_case(input_string):
     """Randomly change the case of each letter of the input_string"""
     rand_bits = random_bits(len(input_string))
-    return ''.join(input_string[i].lower() if rand_bits[i] == '0' else
-                   input_string[i].upper()
-                   for i in range(len(input_string)))
+    return ''.join(
+        input_string[i].lower() if rand_bits[i] == '0' else input_string[i].upper()
+        for i in range(len(input_string))
+    )
 
+
+# ----------------------------
+# Core logic
+# ----------------------------
 
 def delete_comments(input_text):
     """
-    Completely delete all the comments in the input_text.
+    Completely delete comments in the input_text.
     Type 1 comments: "<# ... #>".
-    Type 2 comments: "# ... \n", except for cases when # is surrounded with " or '.
-    :param input_text: a string representing a script to work on.
-    :return: an input_text freed from any comments.
+    Type 2 comments: "# ... \n", except when # is inside " or ' on that line (heuristic).
     """
     output = ''
     start_symbols = ['<#', '#']
     end_symbols = ['#>', '\n']
     assert len(start_symbols) == len(end_symbols)
+
     for i in range(len(start_symbols)):
         output = ''
-        # 1. initial search
+
+        # initial search
         start_index = input_text.find(start_symbols[i])
+
         while start_index >= 0:
-            if input_text[:start_index].split('\n')[-1].replace(" ", "") == "":  # handling spaces before the comment
-                if len(input_text[:start_index].split('\n')[-1]) > 0:
-                    start_index = start_index - len(input_text[:start_index].split('\n')[-1])
-            # 2. append everything up to start_index to the output
-            output = output + input_text[:start_index]
-            # 3. then, either:
-            if i == 0 or (i == 1 and input_text[start_index - 1] != "`" and
-                          ((input_text[:start_index].split('\n')[-1].find("'") == -1 or
-                           input_text[start_index:].split('\n')[0].find("'") == -1) and
-                           (input_text[:start_index].split('\n')[-1].find('"') == -1 or
-                           input_text[start_index:].split('\n')[0].find('"') == -1))):
-                # 3.1. skip the comment
-                end_index = start_index + input_text[start_index:].find(end_symbols[i]) + len(end_symbols[i])
+            # handle indentation before the comment (spaces/tabs)
+            last_line = input_text[:start_index].split('\n')[-1]
+            if last_line.strip() == "":
+                if len(last_line) > 0:
+                    start_index = start_index - len(last_line)
+
+            # append everything up to start_index
+            output += input_text[:start_index]
+
+            # decide whether to treat as a real comment
+            treat_as_comment = True
+            if i == 1:
+                # single-line '#' comments — skip if escaped or inside quotes (rough heuristic)
+                prev_c = _prev_char(input_text, start_index)
+                if prev_c == "`":
+                    treat_as_comment = False
+                else:
+                    # crude: if both sides of the '#' on the same line contain quotes, assume inside quotes
+                    left = input_text[:start_index].split('\n')[-1]
+                    right = input_text[start_index:].split('\n')[0]
+                    if (("'" in left and "'" in right) or ('"' in left and '"' in right)):
+                        treat_as_comment = False
+
+            if treat_as_comment:
+                # skip the comment until its end symbol (or EoF if not found)
+                rel = input_text[start_index:].find(end_symbols[i])
+                if rel == -1:
+                    end_index = len(input_text)
+                else:
+                    end_index = start_index + rel + len(end_symbols[i])
             else:
-                # 3.2. or add the "false" positive '#' to the output
+                # not a real comment; keep the symbol and advance one char
                 end_index = start_index + 1
-                output = output + '#'  # we need '#' this time
-            # 4. cut input_text from the end position
+                output += input_text[start_index:end_index]
+
+            # cut and continue
             input_text = input_text[end_index:]
-            # 5. loop
             start_index = input_text.find(start_symbols[i])
-        output = output + input_text
+
+        output += input_text
         input_text = output
-    while output.find('\n\n\n') != -1:
+
+    # normalize excessive blank lines gently
+    while '\n\n\n' in output:
         output = output.replace('\n\n\n', '\n\n')
     return output
 
@@ -80,163 +136,168 @@ def delete_comments(input_text):
 def rename_variables(input_text):
     """
     Randomly rename variables in input_text and return the result with a mapping table.
-    :param input_text: a string representing a script to work on.
-    :return: (string, dict): an input_text with renamed variables, a mapping table
+
+    Returns: (string, dict) => (text_with_renamed_vars, mapping_dict)
+      mapping_dict keys are original variable names (lowercased, with leading $),
+      values are the randomized replacements (without leading $).
     """
     start_symbol = '$'
-    powershell_auto_vars = ['$NestedPromptLevel', '$PSBoundParameters', '$ExecutionContext', '$ConsoleFileName',
-                            '$EventSubscriber', '$SourceEventArgs', '$PSDebugContext', '$PsVersionTable',
-                            '$PSCommandPath', '$LastExitCode', '$MyInvocation', '$PSScriptRoot', '$PSSenderInfo',
-                            '$PsUICulture', '$SourceArgs', '$StackTrace', '$EventArgs', '$PsCulture', '$Allnodes',
-                            '$PsCmdlet', '$ForEach', '$Matches', '$Profile', '$ShellID', '$PsHome', '$PSitem',
-                            '$Sender', '$Error', '$Event', '$False', '$Input', '$Args', '$Home', '$Host', '$NULL',
-                            '$This', '$True', '$OFS', '$PID', '$Pwd', '$$', '$?', '$^', '$_', '$(']
 
-    powershell_system_vars = []
-    powershell_system_vars = ['Advapi32', 'AccessMask', 'AppDomain', 'Architecture', 'AssemblyName', 'Assembly',
-                              'BatPath', 'B64Binary', 'BackupPath', 'BindingFlags', 'binPath', 'Bitfield',
-                              'CallingConvention', 'Charset', 'CheckAllPermissionsInSet', 'Class', 'Command',
-                              'Credential', 'CurrentUser', 'CustomAttributeBuilder', 'DllBytes', 'DllImportAttribute',
-                              'DllName', 'DllPath', 'Emit', 'EntryPoint', 'EnumElements', 'ExcludeProgramFiles', 'Env',
-                              'ExcludeWindows', 'ExcludeOwned', 'FieldInfo', 'FieldName', 'FieldProp', 'Field', 'File',
-                              'Filter', 'Force', 'FunctionDefinitions', 'FunctionName', 'GetServiceHandle',
-                              'InteropServices', 'Kernel32', 'Keys', 'KeyName', 'KnownDLLs', 'LiteralPaths',
-                              'LocalGroup', 'MarshalAsAttribute', 'MarshalAs', 'Marshal', 'ModuleBuilder', 'ModuleName',
-                              'Module', 'Namespace', 'Name', 'NativeCallingConvention', 'NewField', 'Offset',
-                              'OpCodes', 'Out', 'Owners', 'PackingSize', 'ParameterTypes', 'PasswordToAdd', 'Password',
-                              'Path', 'PermissionSet', 'Permissions', 'Position', 'ProcessName', 'PropertyInfo',
-                              'Properties', 'ReadControl', 'ReplaceString', 'Runtime', 'ReturnType', 'SearchString',
-                              'ServiceAccessRights', 'ServiceCommand', 'ServiceCommands', 'ServiceDetails',
-                              'ServiceName', 'Service', 'SetLastError', 'SID_AND_ATTRIBUTES', 'SidAttributes',
-                              'SizeConst', 'StructBuilder', 'System', 'TargetPermissions', 'TargetService',
-                              'TOKEN_GROUPS', 'TokenGroups', 'TypeAttributes', 'TypeHash', 'Types', 'Type',
-                              'UnmanagedType', 'UserNameToAdd']
+    powershell_auto_vars = [
+        '$NestedPromptLevel', '$PSBoundParameters', '$ExecutionContext', '$ConsoleFileName',
+        '$EventSubscriber', '$SourceEventArgs', '$PSDebugContext', '$PsVersionTable',
+        '$PSCommandPath', '$LastExitCode', '$MyInvocation', '$PSScriptRoot', '$PSSenderInfo',
+        '$PsUICulture', '$SourceArgs', '$StackTrace', '$EventArgs', '$PsCulture', '$Allnodes',
+        '$PsCmdlet', '$ForEach', '$Matches', '$Profile', '$ShellID', '$PsHome', '$PSitem',
+        '$Sender', '$Error', '$Event', '$False', '$Input', '$Args', '$Home', '$Host', '$NULL',
+        '$This', '$True', '$OFS', '$PID', '$Pwd', '$$', '$?', '$^', '$_', '$('  # keep '$(' intact
+    ]
+
+    powershell_system_vars = [
+        'Advapi32', 'AccessMask', 'AppDomain', 'Architecture', 'AssemblyName', 'Assembly',
+        'BatPath', 'B64Binary', 'BackupPath', 'BindingFlags', 'binPath', 'Bitfield',
+        'CallingConvention', 'Charset', 'CheckAllPermissionsInSet', 'Class', 'Command',
+        'Credential', 'CurrentUser', 'CustomAttributeBuilder', 'DllBytes', 'DllImportAttribute',
+        'DllName', 'DllPath', 'Emit', 'EntryPoint', 'EnumElements', 'ExcludeProgramFiles', 'Env',
+        'ExcludeWindows', 'ExcludeOwned', 'FieldInfo', 'FieldName', 'FieldProp', 'Field', 'File',
+        'Filter', 'Force', 'FunctionDefinitions', 'FunctionName', 'GetServiceHandle',
+        'InteropServices', 'Kernel32', 'Keys', 'KeyName', 'KnownDLLs', 'LiteralPaths',
+        'LocalGroup', 'MarshalAsAttribute', 'MarshalAs', 'Marshal', 'ModuleBuilder', 'ModuleName',
+        'Module', 'Namespace', 'Name', 'NativeCallingConvention', 'NewField', 'Offset',
+        'OpCodes', 'Out', 'Owners', 'PackingSize', 'ParameterTypes', 'PasswordToAdd', 'Password',
+        'Path', 'PermissionSet', 'Permissions', 'Position', 'ProcessName', 'PropertyInfo',
+        'Properties', 'ReadControl', 'ReplaceString', 'Runtime', 'ReturnType', 'SearchString',
+        'ServiceAccessRights', 'ServiceCommand', 'ServiceCommands', 'ServiceDetails',
+        'ServiceName', 'Service', 'SetLastError', 'SID_AND_ATTRIBUTES', 'SidAttributes',
+        'SizeConst', 'StructBuilder', 'System', 'TargetPermissions', 'TargetService',
+        'TOKEN_GROUPS', 'TokenGroups', 'TypeAttributes', 'TypeHash', 'Types', 'Type',
+        'UnmanagedType', 'UserNameToAdd'
+    ]
+
     powershell_auto_system_vars = powershell_auto_vars + ['$' + i for i in powershell_system_vars]
-    # before obfuscation
+
+    # Pre-scan to find child names of system vars that should not be replaced
     not_to_replace_dict = {}
+    lt = input_text.lower()
     for system_var in powershell_system_vars:
-        # rand_str = random_string()
-        if '$' + system_var.lower() in input_text.lower():
-            for es in END_SYMBOLS:
-                if '$' + system_var.lower() + es in input_text.lower():
-                    # extract children if any
-                    # ensure there are no variables to obfuscate that will coincide with powershell_system_vars children.
-                    local_found = input_text.lower().find('$' + system_var.lower() + '.')
-                    if local_found > -1:
-                        local_found += len('$' + system_var.lower() + '.')
-                        child = input_text[local_found:
-                                                 local_found + min([input_text[local_found:].find(end_symb)
-                                                                    for end_symb in END_SYMBOLS
-                                                                    if input_text[local_found:].find(end_symb) != -1])]
-                        if '$' + child.lower() not in not_to_replace_dict.keys():
-                            for end_symbol in END_SYMBOLS_BY_2:
-                                if '.' + child.lower() + end_symbol[0] in input_text.lower() and \
-                                        '$' + child.lower() + end_symbol[1] in input_text.lower():
-                                    if '$' + child.lower() not in not_to_replace_dict.keys():
-                                        not_to_replace_dict['$' + child.lower()] = None
-                                        break
-                    # rename
-                    # re_sv = re.compile(re.escape('$' + system_var.lower() + es), re.IGNORECASE)
-                    # input_text = re_sv.sub('$' + system_var + '_' + rand_str + es, input_text)
-    # OBFUSCATION STARTS
-    input_text_raw = input_text
+        token = '$' + system_var.lower()
+        if token in lt:
+            # Protect children like $System.Name => don't rename $Name if it appears as a property paired with a $child
+            dot_idx = lt.find(token + '.')
+            if dot_idx > -1:
+                # after the dot
+                after = dot_idx + len(token) + 1
+                # extract child token up to the next end symbol
+                child_end = _next_end_index(lt, after - 1, END_SYMBOLS)  # -1 so it starts searching from 'after'
+                child = input_text[after:child_end]
+                if child:
+                    cand = '$' + child.lower()
+                    if cand not in not_to_replace_dict:
+                        # verify the pair ".child" and "$child" occur in plausible positions
+                        for end_symbol_a, end_symbol_b in END_SYMBOLS_BY_2:
+                            if ('.' + child.lower() + end_symbol_a) in lt and (cand + end_symbol_b) in lt:
+                                not_to_replace_dict[cand] = None
+                                break
+
+    input_text_raw = input_text  # keep original for context tests if needed
     vars_dict = {}
     output = ''
-    # 1. initial search
+
+    # scanning loop
     start_index = input_text.find(start_symbol)
     start_index_raw = start_index
-    end_index = start_index
-    while start_index >= 0:
-        # 1. append everything up to start_index to the output
-        output = output + input_text[:start_index]
-        # 2. then, either 2.1, 2.2 or 2.3:
-        # " does not cancel $ symbol, ' does.
-        # if we're in "here", ' inside "" does not cancel $.
-        assert input_text_raw[:start_index_raw][-start_index:] == input_text[:start_index][-start_index:]
-        if (input_text_raw[:start_index_raw].count("'") -
-            input_text_raw[:start_index_raw].count("`'") -
-            input_text_raw[:start_index_raw].count('"\'"')) % 2 != 0 and not\
-                (input_text_raw[:start_index_raw].count('"') -
-                 input_text_raw[:start_index_raw].count('`"') -
-                 input_text_raw[:start_index_raw].count("'\"'")) % 2 != 0:
-            # we're in 'here'
-            # 2.1.1. add for the "false" positive '$'
-            end_index = start_index + 1
-            output = output + "$"
-        elif input_text[start_index - 1] == "`" or input_text[start_index + 1] in END_SYMBOLS:
-            # 2.1.2. add for the "false" positive '$'
-            end_index = start_index + 1
-            output = output + "$"
-        elif any([(input_text[start_index: start_index + len(exc_var)].lower() == exc_var.lower() and
-                  input_text[start_index + len(exc_var)] in END_SYMBOLS) for exc_var in powershell_auto_system_vars]):
-            for exc_var in powershell_auto_system_vars:
-                if input_text[start_index: start_index + len(exc_var)].lower() == exc_var.lower() and \
-                        input_text[start_index + len(exc_var)] in END_SYMBOLS:
-                    # 2.2. add for the "false" positive '$'
-                    end_index = start_index + len(exc_var)
-                    output = output + exc_var  # randomize_case(exc_var)
-                    break
-            # value's guaranteed by elif condition.
-        else:
-            # 2.3. or find the ending
-            end_index = start_index
-            end_index = end_index + min([input_text[end_index:].find(end_symbol)
-                                         for end_symbol in END_SYMBOLS
-                                         if input_text[end_index:].find(end_symbol) != -1])
-            # check if the ending was a false positive due to escape symbols:
-            # assert input_text_raw[:start_index_raw][-8:] == input_text[:start_index][-8:]
-#            while input_text[end_index] == "`" or \
-#                    (input_text_raw[:start_index_raw].count("'") -
-#                     input_text_raw[:start_index_raw].count("`'") -
-#                     input_text_raw[:start_index_raw].count('"\'"')) % 2 != 0 and not \
-                    #(input_text_raw[:start_index_raw].count('"') -
-                     #input_text_raw[:start_index_raw].count('`"') -
-                     #input_text_raw[:start_index_raw].count("'\"'")) % 2 != 0:
-                #end_index = end_index + min([input_text[end_index:].find(end_symbol)
-                                             #for end_symbol in END_SYMBOLS
-                                             #if input_text[end_index:].find(end_symbol) != -1])
-            # 3. generate and append a new variable name
-            source_var_name = input_text[start_index: end_index]
 
-            res_1 = any([(" -" + source_var_name[1:].lower() + es) in input_text_raw.lower() for es in END_SYMBOLS])
-            res_2 = any([("." + source_var_name[1:].lower() + es) in input_text_raw.lower() for es in END_SYMBOLS])
-            res_3 = ("['" + source_var_name[1:].lower() + "']") in input_text_raw.lower()
-            res_4 = ('["' + source_var_name[1:].lower() + '"]') in input_text_raw.lower()
-            res_5 = ('$' + source_var_name[1:].lower() + ':') in input_text_raw.lower()
-            if source_var_name.lower() not in not_to_replace_dict and not (res_1 or res_2 or res_3 or res_4 or res_5):
-                if source_var_name.lower() not in vars_dict:
-                    vars_dict[source_var_name.lower()] = random_string()
-                output = output + "$" + vars_dict[source_var_name.lower()]
+    while start_index >= 0:
+        # append everything up to start_index
+        output += input_text[:start_index]
+
+        # quote-state heuristic (keep original behavior, but safer)
+        in_single_heur = (
+            (input_text_raw[:start_index_raw].count("'")
+             - input_text_raw[:start_index_raw].count("`'")
+             - input_text_raw[:start_index_raw].count('"\'"')) % 2 != 0
+        )
+        in_double_heur = (
+            (input_text_raw[:start_index_raw].count('"')
+             - input_text_raw[:start_index_raw].count('`"')
+             - input_text_raw[:start_index_raw].count("'\"'")) % 2 != 0
+        )
+
+        prev_c = _prev_char(input_text, start_index)
+        next_c = input_text[start_index + 1] if (start_index + 1) < len(input_text) else None
+
+        # Cases we deliberately do NOT treat as variable starts
+        if (in_single_heur and not in_double_heur) or prev_c == '`' or next_c in END_SYMBOLS or next_c is None:
+            # false positive: keep '$' and move on by 1
+            end_index = start_index + 1
+            output += "$"
+        else:
+            # Parse the variable token
+            token_start = start_index
+            var_token = '$'
+            var_name = None  # without '$' and braces
+            token_end = start_index + 1
+
+            if next_c == '{':
+                # ${var}
+                close = input_text.find('}', start_index + 2)
+                if close != -1:
+                    var_name = input_text[start_index + 2:close]
+                    var_token = input_text[start_index:close + 1]  # include braces
+                    token_end = close + 1
+                else:
+                    # unmatched '{' — treat '$' as normal char
+                    end_index = start_index + 1
+                    output += "$"
+                    input_text = input_text[end_index:]
+                    # advance raw pointers
+                    offset = end_index - start_index
+                    start_index = input_text.find(start_symbol)
+                    start_index_raw = start_index_raw + offset + (start_index if start_index != -1 else len(input_text))
+                    continue
             else:
-                output = output + source_var_name
-        # 4. cut input_text from the end position
+                # $name
+                token_end = _next_end_index(input_text, start_index, END_SYMBOLS)
+                var_token = input_text[start_index:token_end]
+                var_name = var_token[1:]
+
+            # Reserved / auto vars: leave untouched
+            # Normalize to $name form for comparison
+            comp_token = ('$' + var_name) if var_name is not None else var_token
+            is_reserved = any(comp_token.lower() == ev.lower() for ev in powershell_auto_system_vars)
+
+            # Avoid renaming risky/system-like children detected earlier
+            skip_by_child = (comp_token.lower() in not_to_replace_dict)
+
+            if is_reserved or skip_by_child or not var_name:
+                output += var_token
+                end_index = token_end
+            else:
+                key = comp_token.lower()  # store as $name (lowercased)
+                if key not in vars_dict:
+                    vars_dict[key] = random_string()
+
+                new_name = vars_dict[key]
+                if var_token.startswith('${'):
+                    # preserve brace form
+                    output += '${' + new_name + '}'
+                else:
+                    output += '$' + new_name
+                end_index = token_end
+
+        # cut processed chunk
         input_text = input_text[end_index:]
-        offset = end_index - start_index  # if var this is len(source_var_name)
-        input_text_raw_cut = input_text_raw[start_index_raw + offset:]
-        assert input_text_raw_cut[:-3] == input_text[:-3]
-        # 5. loop
+        # advance raw pointer consistently
+        offset = end_index - start_index
+        # find next
         start_index = input_text.find(start_symbol)
-        start_index_raw = start_index_raw + offset + start_index
-    output = output + input_text
-    # 6. additional replacement 1 - function parameter names (FUNCTION_NAME -PARAMETER):
-    for end_symbol in END_SYMBOLS:
-        if end_symbol != '\\':
-            for k, v in vars_dict.items():
-                k_ = k[1:]
-                re_k = re.compile(re.escape(" -" + k_ + end_symbol), re.IGNORECASE)
-                output = re_k.sub(" -" + v + end_symbol, output)
-    # 7. additional replacement 2 - attributes (object.attribute):
-    for end_symbol in END_SYMBOLS:
-        if end_symbol != '\\':
-            for k, v in vars_dict.items():
-                k_ = k[1:]
-                re_k = re.compile(re.escape("." + k_ + end_symbol), re.IGNORECASE)
-                output = re_k.sub("." + v + end_symbol, output)
-    # 8. additional replacement 3 - parameter names in quotes (GetField('PARAMETER')):
-    for k, v in vars_dict.items():
-        k_ = k[1:]
-        re_k = re.compile(re.escape("'" + k_ + "'"), re.IGNORECASE)
-        output = re_k.sub("'" + v + "'", output)
+        start_index_raw = start_index_raw + offset + (start_index if start_index != -1 else len(input_text))
+
+    output += input_text
+
+    # IMPORTANT: Removed dangerous passes that renamed parameter names, properties, and quoted identifiers.
+    # (Original steps 6–8). Those caused widespread breakage.
+
     return output, vars_dict
 
 
@@ -249,18 +310,26 @@ def main(input_text):
 
 if __name__ == '__main__':
     old_file = 'PowerUp.ps1 - Source.txt'
-    old_file_split = old_file.split('.')
-    new_semi_obfs_file = ''.join(old_file_split[:-1]) + ' - semi-obfuscated.' + old_file_split[-1]
-    new_obfs_file = ''.join(old_file_split[:-1]) + ' - obfuscated.' + old_file_split[-1]
-    with open(old_file, 'r') as fr:
+
+    base, ext = os.path.splitext(old_file)
+    new_semi_obfs_file = f'{base} - semi-obfuscated{ext}'
+    new_obfs_file = f'{base} - obfuscated{ext}'
+
+    with open(old_file, 'r', encoding='utf-8') as fr:
         input_data = fr.read()
+
     semi_obfs_data, obfs_data, vars_dict, funcs_dict = main(input_data)
-    with open(new_semi_obfs_file, 'w') as f:
+
+    with open(new_semi_obfs_file, 'w', encoding='utf-8') as f:
         f.write(semi_obfs_data)
-    with open(new_obfs_file, 'w') as f:
+
+    with open(new_obfs_file, 'w', encoding='utf-8') as f:
         f.write(obfs_data)
+
+    # mapping output
     vd = sorted([' - '.join(i) for i in vars_dict.items()])
     fd = sorted([' - '.join(i) for i in funcs_dict.items()])
     mapping = 'Functions: \n' + '\n'.join(fd) + '\n\n\nVariables: \n' + '\n'.join(vd)
-    with open(new_obfs_file + '- name mapping.txt', 'w') as f:
+
+    with open(new_obfs_file + ' - name mapping.txt', 'w', encoding='utf-8') as f:
         f.write(str(mapping))
